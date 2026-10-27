@@ -11,8 +11,6 @@ df = pd.concat(
     (pd.read_csv(f, low_memory=False) for f in all_files), ignore_index=True
 )
 
-print(f"Successfully loaded dataset with {df.shape[0]} rows!")
-
 # Filter for Clutch Situations
 # Standard definition: 4th quarter or later (period >= 4), 
 # score margin within 5 points, and 5 minutes or less remaining.
@@ -20,8 +18,15 @@ print(f"Successfully loaded dataset with {df.shape[0]} rows!")
 # Convert scoremargin to numeric safely (handling any non-numeric text rows like "TIE")
 margin_numeric = pd.to_numeric(df['scoremargin'], errors='coerce')
 
+# Split 'MM:SS' into minutes and seconds, then convert to total seconds remaining
+time_parts = df['pctimestring'].str.split(':', expand=True)
+minutes = pd.to_numeric(time_parts[0], errors='coerce')
+seconds = pd.to_numeric(time_parts[1], errors='coerce')
+total_seconds = (minutes * 60) + seconds
+
 clutch_df = df[
     (df['period'] >= 4) & 
+    (total_seconds <= 300) & 
     (margin_numeric.abs() <= 5)
 ]
 
