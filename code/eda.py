@@ -91,3 +91,7 @@ comparison_df.to_csv("output/clutch_vs_overall_all_players.csv", index=False)
 filtered_comparison.to_csv("output/clutch_vs_overall_qualified.csv", index=False)
 
 print("\nSuccessfully exported CSV files to the 'output/' directory!")
+
+# Find the minimum (oldest) game_id in the dataset
+oldest_game_id = df['game_id'].min()
+print(f"\nThe oldest game ID in the dataset is: {oldest_game_id}")
