@@ -164,17 +164,66 @@ def preview_shot_tags(df: pd.DataFrame, n: int = 10) -> None:
     print("\nShot type counts across all FGA:")
     print(shots["shot_type"].value_counts())
 
-def main() -> None:
-    df = load_play_by_play()
-    preview_shot_tags(df)
-    df = flag_clutch_plays(df)
-    comparison_df, filtered_comparison = build_player_comparison(df)
+def record_step(
+    audit_log: list[dict],
+    step_name: str,
+    df: pd.DataFrame,
+    prev_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Append row, column, and missing-value changes after a pipeline step."""
+    cols = set(df.columns)
+    prev_cols = set(prev_df.columns) if prev_df is not None else cols
 
-    print_summary(df, filtered_comparison)
+    added_cols = sorted(cols - prev_cols)
+    dropped_cols = sorted(prev_cols - cols)
+    rows_delta = len(df) - len(prev_df) if prev_df is not None else 0
+    na_delta = int(df.isna().sum().sum() - prev_df.isna().sum().sum()) if prev_df is not None else 0
+
+    audit_log.append({
+        "step": step_name,
+        "rows": len(df),
+        "rows_delta": rows_delta,
+        "cols": len(df.columns),
+        "added_cols": ", ".join(added_cols) if added_cols else "-",
+        "dropped_cols": ", ".join(dropped_cols) if dropped_cols else "-",
+        "na_cells_delta": na_delta,
+    })
+    return df
+
+
+def print_audit_log(audit_log: list[dict]) -> pd.DataFrame:
+    """Print summary counts and return the full audit DataFrame."""
+    log_df = pd.DataFrame(audit_log)
+    summary_cols = ["step", "rows", "rows_delta", "cols", "na_cells_delta"]
+    print("\n--- Pipeline Step Audit ---")
+    print(log_df[summary_cols].to_string(index=False))
+    return log_df
+
+def main() -> None:
+    audit_log: list[dict] = []
+
+    raw_df = load_play_by_play()
+    record_step(audit_log, "1. Load raw play-by-play CSVs", raw_df)
+
+    flagged_df = flag_clutch_plays(raw_df)
+    record_step(audit_log, "2. Clean margin/clock & flag clutch", flagged_df, raw_df)
+
+    shots_df = flagged_df[flagged_df["eventmsgtype"].isin([1, 2])].copy()
+    shots_df["shot_made"] = (shots_df["eventmsgtype"] == 1).astype(int)
+    shots_df = tag_shot_types(shots_df)
+    record_step(audit_log, "3. Filter FGA (events 1,2) & tag 2PT/3PT", shots_df, flagged_df)
+
+    comparison_df, filtered_comparison = build_player_comparison(flagged_df)
+    record_step(audit_log, "4. Player comparison (all paired)", comparison_df, shots_df)
+    record_step(audit_log, "5. Qualified players (>= 25 clutch FGA)", filtered_comparison, comparison_df)
+
+    print_summary(flagged_df, filtered_comparison)
+    log_df = print_audit_log(audit_log)
 
     os.makedirs("output", exist_ok=True)
     comparison_df.to_csv("output/clutch_vs_non_clutch_all_players.csv", index=False)
     filtered_comparison.to_csv("output/clutch_vs_non_clutch_qualified.csv", index=False)
+    log_df.to_csv("output/pipeline_step_log.csv", index=False)
     print("\nExported CSVs to 'output/'")
 
 

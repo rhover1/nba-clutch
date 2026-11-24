@@ -1,0 +1,6 @@
+step,rows,rows_delta,cols,added_cols,dropped_cols,na_cells_delta
+1. Load raw play-by-play CSVs,13592899,0,34,-,-,0
+2. Clean margin/clock & flag clutch,13592899,0,36,"is_clutch, scoremargin_clean",-,145130
+"3. Filter FGA (events 1,2) & tag 2PT/3PT",4941733,-8651166,39,"is_3pt, shot_made, shot_type",-,-110942596
+4. Player comparison (all paired),2076,-4939657,19,"2PT_FG_diff, 3PA_rate_diff, 3PT_FG_diff, clutch_2PA_rate, clutch_2PT_FG_pct, clutch_3PA_rate, clutch_3PT_FG_pct, clutch_FGA, clutch_FGM, clutch_FG_pct, fg_diff, non_clutch_2PA_rate, non_clutch_2PT_FG_pct, non_clutch_3PA_rate, non_clutch_3PT_FG_pct, non_clutch_FGA, non_clutch_FGM, non_clutch_FG_pct","eventmsgactiontype, eventmsgtype, eventnum, game_id, homedescription, is_3pt, is_clutch, neutraldescription, pctimestring, period, person1type, person2type, person3type, player1_id, player1_team_abbreviation, player1_team_city, player1_team_id, player1_team_nickname, player2_id, player2_name, player2_team_abbreviation, player2_team_city, player2_team_id, player2_team_nickname, player3_id, player3_name, player3_team_abbreviation, player3_team_city, player3_team_id, player3_team_nickname, score, scoremargin, scoremargin_clean, shot_made, shot_type, video_available_flag, visitordescription, wctimestring",-56337827
+5. Qualified players (>= 25 clutch FGA),1040,-1036,19,-,-,-1135
