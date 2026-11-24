@@ -2,121 +2,107 @@ import glob
 import os
 import pandas as pd
 
-# Store files in a list and sort them to ensure correct order
-all_files = sorted(glob.glob("data/play_by_play_part*.csv"))
 
-# Combine all the CSV files into a single dataframe
-df = pd.concat(
-    (pd.read_csv(f, low_memory=False) for f in all_files), ignore_index=True
-)
+def load_play_by_play(pattern: str = "data/play_by_play_part*.csv") -> pd.DataFrame:
+    """Load and stack all play-by-play CSV parts."""
+    files = sorted(glob.glob(pattern))
+    return pd.concat((pd.read_csv(f, low_memory=False) for f in files), ignore_index=True)
 
-# Clean scoremargin, replace TIE with 0, and forward-fill across each game
-# so non-scoring plays like misses inherit the correct score margin from prior plays
-df["scoremargin_clean"] = pd.to_numeric(
-    df["scoremargin"].replace("TIE", 0), errors="coerce"
-)
-df["scoremargin_clean"] = df.groupby("game_id")["scoremargin_clean"].ffill()
 
-# Split 'MM:SS' into minutes and seconds, then convert to total seconds remaining
-time_parts = df["pctimestring"].str.split(":", expand=True)
-minutes = pd.to_numeric(time_parts[0], errors="coerce")
-seconds = pd.to_numeric(time_parts[1], errors="coerce")
-total_seconds = (minutes * 60) + seconds
+def flag_clutch_plays(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean score margin and clock, then add a boolean `is_clutch` column."""
+    df = df.copy()
 
-# Flag clutch rows instead of discarding non-clutch rows
-df["is_clutch"] = (
-    (df["period"] >= 4)
-    & (total_seconds <= 300)
-    & (df["scoremargin_clean"].abs() <= 5)
-)
+    # Replace TIE with 0 and forward-fill within each game for non-scoring plays
+    margin = pd.to_numeric(df["scoremargin"].replace("TIE", 0), errors="coerce")
+    df["scoremargin_clean"] = margin.groupby(df["game_id"]).ffill()
 
-clutch_df = df[df["is_clutch"]]
-print(f"Filtered down to {clutch_df.shape[0]} clutch rows!")
+    # Convert 'MM:SS' clock to total seconds remaining in period
+    time_parts = df["pctimestring"].str.split(":", expand=True)
+    minutes = pd.to_numeric(time_parts[0], errors="coerce")
+    seconds = pd.to_numeric(time_parts[1], errors="coerce")
+    total_seconds = (minutes * 60) + seconds
 
-preview_cols = [
-    "period",
-    "pctimestring",
-    "scoremargin",
-    "player1_name",
-    "homedescription",
-    "visitordescription",
-]
-print(clutch_df[preview_cols].head(10))
-
-# Isolate shooting events (Event 1 = made shot, Event 2 = missed shot)
-shot_df = df[df["eventmsgtype"].isin([1, 2])].copy()
-shot_df["shot_made"] = (shot_df["eventmsgtype"] == 1).astype(int)
-
-clutch_shots = shot_df[shot_df["is_clutch"]]
-non_clutch_shots = shot_df[~shot_df["is_clutch"]]
-
-# Calculate non-clutch shooting stats per player (mutually exclusive baseline)
-non_clutch_stats = (
-    non_clutch_shots.groupby("player1_name")
-    .agg(
-        non_clutch_FGA=("shot_made", "count"),
-        non_clutch_FGM=("shot_made", "sum"),
+    # Clutch: 4th quarter or OT, <= 5 mins remaining, score within 5 points
+    df["is_clutch"] = (
+        (df["period"] >= 4)
+        & (total_seconds <= 300)
+        & (df["scoremargin_clean"].abs() <= 5)
     )
-    .reset_index()
-)
-non_clutch_stats["non_clutch_FG_pct"] = (
-    non_clutch_stats["non_clutch_FGM"] / non_clutch_stats["non_clutch_FGA"]
-)
+    return df
 
-# Calculate clutch shooting stats per player
-clutch_stats = (
-    clutch_shots.groupby("player1_name")
-    .agg(
-        clutch_FGA=("shot_made", "count"),
-        clutch_FGM=("shot_made", "sum"),
+
+def summarize_shots(shots: pd.DataFrame, prefix: str) -> pd.DataFrame:
+    """Aggregate FGA, FGM, and FG% per player for a given subset of shots."""
+    stats_df = (
+        shots.groupby("player1_name")
+        .agg(
+            FGA=("shot_made", "count"),
+            FGM=("shot_made", "sum"),
+        )
+        .reset_index()
     )
-    .reset_index()
-)
-clutch_stats["clutch_FG_pct"] = (
-    clutch_stats["clutch_FGM"] / clutch_stats["clutch_FGA"]
-)
+    stats_df["FG_pct"] = stats_df["FGM"] / stats_df["FGA"]
+    return stats_df.rename(
+        columns={
+            "FGA": f"{prefix}_FGA",
+            "FGM": f"{prefix}_FGM",
+            "FG_pct": f"{prefix}_FG_pct",
+        }
+    )
 
-# Merge clutch and non-clutch stats (inner join keeps players with both)
-comparison_df = pd.merge(
-    non_clutch_stats, clutch_stats, on="player1_name", how="inner"
-)
-comparison_df["fg_diff"] = (
-    comparison_df["clutch_FG_pct"] - comparison_df["non_clutch_FG_pct"]
-)
 
-# Filter for players with at least 25 clutch attempts
-filtered_comparison = comparison_df[comparison_df["clutch_FGA"] >= 25].copy()
+def build_player_comparison(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compare clutch vs. non-clutch FG% per player and return (all, qualified)."""
+    shots = df[df["eventmsgtype"].isin([1, 2])].copy()
+    shots["shot_made"] = (shots["eventmsgtype"] == 1).astype(int)
 
-print("\n--- Top Clutch Risers (vs. Non-Clutch) ---")
-print(
-    filtered_comparison.sort_values(by="fg_diff", ascending=False)[
-        [
-            "player1_name",
-            "non_clutch_FG_pct",
-            "clutch_FG_pct",
-            "fg_diff",
-            "non_clutch_FGA",
-            "clutch_FGA",
-        ]
-    ].head(5)
-)
+    non_clutch = summarize_shots(shots[~shots["is_clutch"]], "non_clutch")
+    clutch = summarize_shots(shots[shots["is_clutch"]], "clutch")
 
-print("\n--- Biggest Efficiency Dips Under Pressure (vs. Non-Clutch) ---")
-print(
-    filtered_comparison.sort_values(by="fg_diff", ascending=True)[
-        [
-            "player1_name",
-            "non_clutch_FG_pct",
-            "clutch_FG_pct",
-            "fg_diff",
-            "non_clutch_FGA",
-            "clutch_FGA",
-        ]
-    ].head(5)
-)
+    comparison = pd.merge(non_clutch, clutch, on="player1_name", how="inner")
+    comparison["fg_diff"] = comparison["clutch_FG_pct"] - comparison["non_clutch_FG_pct"]
 
-os.makedirs("output", exist_ok=True)
-comparison_df.to_csv("output/clutch_vs_non_clutch_all_players.csv", index=False)
-filtered_comparison.to_csv("output/clutch_vs_non_clutch_qualified.csv", index=False)
+    qualified = comparison[comparison["clutch_FGA"] >= 25].copy()
+    return comparison, qualified
 
-print("\nSuccessfully exported CSV files to the 'output/' directory!")
+
+def print_summary(df: pd.DataFrame, qualified: pd.DataFrame) -> None:
+    """Print row attrition counts and top/bottom 5 clutch performers."""
+    shots = df[df["eventmsgtype"].isin([1, 2])]
+    print(f"Total raw rows: {len(df):,}")
+    print(f"Total clutch rows: {df['is_clutch'].sum():,}")
+    print(f"Total field goal attempts: {len(shots):,}")
+    print(f"Clutch field goal attempts: {shots['is_clutch'].sum():,}")
+    print(f"Qualified players (>= 25 clutch FGA): {len(qualified):,}")
+
+    cols = [
+        "player1_name",
+        "non_clutch_FG_pct",
+        "clutch_FG_pct",
+        "fg_diff",
+        "non_clutch_FGA",
+        "clutch_FGA",
+    ]
+    print("\n--- Top 5 Clutch Risers ---")
+    print(qualified.sort_values("fg_diff", ascending=False)[cols].head(5).to_string(index=False))
+
+    print("\n--- Top 5 Efficiency Dips ---")
+    print(qualified.sort_values("fg_diff", ascending=True)[cols].head(5).to_string(index=False))
+
+
+def main() -> None:
+    df = load_play_by_play()
+    df = flag_clutch_plays(df)
+    comparison_df, filtered_comparison = build_player_comparison(df)
+
+    print_summary(df, filtered_comparison)
+
+    os.makedirs("output", exist_ok=True)
+    comparison_df.to_csv("output/clutch_vs_non_clutch_all_players.csv", index=False)
+    filtered_comparison.to_csv("output/clutch_vs_non_clutch_qualified.csv", index=False)
+    print("\nExported CSVs to 'output/'")
+
+
+if __name__ == "__main__":
+    main()
