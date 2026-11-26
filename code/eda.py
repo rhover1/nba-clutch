@@ -12,10 +12,11 @@ def load_play_by_play(pattern: str = "data/play_by_play_part*.csv") -> pd.DataFr
 def flag_clutch_plays(df: pd.DataFrame) -> pd.DataFrame:
     """Clean score margin and clock, then add a boolean `is_clutch` column."""
     df = df.copy()
-
-    # Replace TIE with 0 and forward-fill within each game for non-scoring plays
+    
     margin = pd.to_numeric(df["scoremargin"].replace("TIE", 0), errors="coerce")
-    df["scoremargin_clean"] = margin.groupby(df["game_id"]).ffill()
+    margin = margin.groupby(df["game_id"]).ffill()
+    # Use the score margin before the current event
+    df["scoremargin_clean"] = margin.groupby(df["game_id"]).shift(1)
 
     # Convert 'MM:SS' clock to total seconds remaining in period
     time_parts = df["pctimestring"].str.split(":", expand=True)
